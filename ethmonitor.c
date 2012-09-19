@@ -9,7 +9,7 @@
  */
 
 #define DEBUG 0
-
+#define RETRY_DHCP_SECS 30 /* 0 if no retry, otherwise seconds between DHCP attempts */
 
 #include <signal.h>
 #include <stdio.h>
@@ -24,6 +24,8 @@
 #include <net/if.h>
 #include <ethtool-copy.h>
 
+#include <time.h>
+
 #include <cutils/properties.h>
 #include <private/android_filesystem_config.h>
 
@@ -35,12 +37,15 @@ int do_dhcp(char *iname);
 
 static int thread_running = 0;
 static int LONG_TIME = 600;
+static int retry_dhcp = 0;
+static struct timespec retry_time;
 
 void dhcp_function(void *ptr)
 {
 	char buf[PROPERTY_KEY_MAX];
 	char value[PROPERTY_VALUE_MAX];
 	char *interface = (char *) ptr;
+	int retval;
   fprintf(stdout, "ethmonitor: start dhcp_function\n");
 	thread_running = 1;
 
@@ -48,11 +53,25 @@ void dhcp_function(void *ptr)
 	printf("dhcp_function calling do_dhcp\n");
 #endif
 
-	do_dhcp(interface);
+	retval = do_dhcp(interface);
 #ifdef DEBUG
-	printf("dhcp_function do_dhcp returned\n");
+	printf("dhcp_function do_dhcp returned %d\n", retval);
 #endif
 	sleep(1); /* beagleboard needs a second */
+	if (retval != 0) {
+		/* DHCP did not succeed */
+		if (RETRY_DHCP_SECS) {
+			clock_gettime(CLOCK_MONOTONIC, &retry_time);
+			retry_time.tv_sec += RETRY_DHCP_SECS;
+			retry_dhcp = 1;
+		} else {
+			retry_dhcp = 0; /* Just don't want to retry */
+		}
+		thread_running = 0;
+		fprintf(stdout, "ethmonitor: exit dhcp_function (failed)\n");
+		return;
+	}
+	retry_dhcp = 0;
 
 	/* DNS setting #1 */
 	snprintf(buf, sizeof(buf), "net.%s.dns1", interface);
@@ -69,7 +88,7 @@ void dhcp_function(void *ptr)
 	property_set("net.dns2", value);
 
 	thread_running = 0;
-  fprintf(stdout, "ethmonitor: exit dhcp_function\n");
+	fprintf(stdout, "ethmonitor: exit dhcp_function\n");
 }
 
 
@@ -100,6 +119,7 @@ void monitor_connection(char *interface)
 	int state = 0;
 	int tmp_state = 0;
 	int fd;
+	struct timespec time_now;
 
 	pthread_t thread;
 #ifdef DEBUG
@@ -107,7 +127,7 @@ void monitor_connection(char *interface)
 #endif
 
 	while (1) {
-			sleep(5); 
+		sleep(5); 
 		/* setup the control structures */
 		memset(&ifr, 0, sizeof(ifr));
 		strcpy(ifr.ifr_name, interface);
@@ -120,10 +140,20 @@ void monitor_connection(char *interface)
 		}
 
 		tmp_state = get_link_status(fd, &ifr);
+	    close(fd);
+
 #ifdef DEBUG
-      printf("ethmonitor.monitor_connection 4 get_link_status returned. connection state changed: %d previous state: %d\n", tmp_state, state);
+		printf("ethmonitor.monitor_connection 4 get_link_status returned. connection state changed: %d previous state: %d\n", tmp_state, state);
 #endif
 		if (tmp_state != state) { /* state changed */
+
+			if (thread_running) {
+#ifdef DEBUG
+				printf("Cannot open control interface for %s 2. try again\n", interface);
+#endif
+				//exit(0); /* pthread_kill doesn't work correctly */
+				continue;
+			}
 
 			state = tmp_state;
 
@@ -133,19 +163,11 @@ void monitor_connection(char *interface)
 			snprintf(buf, sizeof(buf), "net.%s.status", interface);
 			property_set(buf, state ? "up" : "down");
 
-			if (thread_running && !tmp_state){
-#ifdef DEBUG
-           printf("Cannot open control interface for %s 2. try again\n", interface);
-#endif
-           //exit(0); /* pthread_kill doesn't work correctly */
-           continue;
-         }
-
 			if (state) { /* bring up connection */
 #ifdef DEBUG
 				printf("Connection up %s\n", interface);
 #endif
-        fprintf(stdout, "ethmonitor: monitor_connection  5 call dhcp_function\n");
+				fprintf(stdout, "ethmonitor: monitor_connection  5 call dhcp_function\n");
 				pthread_create (&thread, NULL, (void *) &dhcp_function, (void *) interface);
 
 			} else { /* down connection */
@@ -154,8 +176,16 @@ void monitor_connection(char *interface)
 #endif
 			}
 
+		} else if (state && (! thread_running) && retry_dhcp) {
+			/* It may be time to retry */
+			clock_gettime(CLOCK_MONOTONIC, &time_now);
+			if (time_now.tv_sec < retry_time.tv_sec) continue; /* not time yet */
+			if (time_now.tv_sec == retry_time.tv_sec &&
+				time_now.tv_nsec < retry_time.tv_nsec) continue; /* not time yet */
+			/* yes it's time */
+			retry_dhcp = 0; /* Just to avoid a race condition */
+			pthread_create (&thread, NULL, (void *) &dhcp_function, (void *) interface);
 		}
-	    close(fd);
 	}
 }
 /*
