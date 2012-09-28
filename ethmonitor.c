@@ -8,7 +8,7 @@
  *
  */
 
-#define DEBUG 0
+
 #define RETRY_DHCP_SECS 30 /* 0 if no retry, otherwise seconds between DHCP attempts */
 
 #include <signal.h>
