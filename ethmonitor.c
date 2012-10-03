@@ -8,7 +8,6 @@
  *
  */
 
-
 #define RETRY_DHCP_SECS 30 /* 0 if no retry, otherwise seconds between DHCP attempts */
 
 #include <signal.h>
@@ -70,8 +69,9 @@ void dhcp_function(void *ptr)
 		thread_running = 0;
 		fprintf(stdout, "ethmonitor: exit dhcp_function (failed)\n");
 		return;
+	} else {
+		retry_dhcp = 0;
 	}
-	retry_dhcp = 0;
 
 	/* DNS setting #1 */
 	snprintf(buf, sizeof(buf), "net.%s.dns1", interface);
@@ -89,6 +89,7 @@ void dhcp_function(void *ptr)
 
 	thread_running = 0;
 	fprintf(stdout, "ethmonitor: exit dhcp_function\n");
+	pthread_exit(NULL);
 }
 
 
