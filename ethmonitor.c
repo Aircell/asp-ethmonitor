@@ -8,7 +8,12 @@
  *
  */
 
-#define RETRY_DHCP_SECS 30 /* 0 if no retry, otherwise seconds between DHCP attempts */
+/* 
+ Retry interval;  may as well be short, the phone is usless otherwise,
+ but the value should also be relatively prime with broadcast intervals 
+ such as AMP
+ */
+#define RETRY_DHCP_SECS 19 
 
 #include <signal.h>
 #include <stdio.h>
