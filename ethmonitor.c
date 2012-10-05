@@ -13,7 +13,7 @@
  but the value should also be relatively prime with broadcast intervals 
  such as AMP
  */
-#define RETRY_DHCP_SECS 19 
+#define RETRY_DHCP_SECS 11 
 
 #include <signal.h>
 #include <stdio.h>
