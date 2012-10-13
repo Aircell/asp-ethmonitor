@@ -37,27 +37,64 @@ int ifc_init();
 void ifc_close();
 int ifc_up(char *iname);
 int ifc_down(char *iname);
-int do_dhcp(char *iname);
+typedef struct dhcp_info dhcp_info;
+
+struct dhcp_info {
+    uint32_t type;
+
+    uint32_t ipaddr;
+    uint32_t gateway;
+    uint32_t netmask;
+
+    uint32_t dns1;
+    uint32_t dns2;
+
+    uint32_t serveraddr;
+    uint32_t lease;
+};
+int do_dhcp(char *iname, dhcp_info *pinfo);
+int do_dhcp_renew(char *iname, dhcp_info *pinfo);
+
 
 static int thread_running = 0;
+static int renew_running = 0;
 static int LONG_TIME = 600;
 static int retry_dhcp = 0;
 static struct timespec retry_time;
+
+typedef struct {
+	char *interface;
+	dhcp_info info;
+} tdata_t;
+	
+void dhcp_function_renew(void *ptr)
+{
+	tdata_t *tdata = ptr;
+	int retval;
+	renew_running = 1;
+	  fprintf(stdout, "ethmonitor: start dhcp_function_renew on %s\n", tdata->interface);
+	retval = do_dhcp_renew(tdata->interface, &(tdata->info));
+	renew_running = 0;
+	pthread_exit(NULL);
+
+}
 
 void dhcp_function(void *ptr)
 {
 	char buf[PROPERTY_KEY_MAX];
 	char value[PROPERTY_VALUE_MAX];
-	char *interface = (char *) ptr;
+	tdata_t *tdata = ptr;
+        dhcp_info info;
 	int retval;
-  fprintf(stdout, "ethmonitor: start dhcp_function\n");
+  fprintf(stdout, "ethmonitor: start dhcp_function on %s\n",
+		tdata->interface);
 	thread_running = 1;
 
 #ifdef DEBUG
 	printf("dhcp_function calling do_dhcp\n");
 #endif
 
-	retval = do_dhcp(interface);
+	retval = do_dhcp(tdata->interface, &(tdata->info));
 #ifdef DEBUG
 	printf("dhcp_function do_dhcp returned %d\n", retval);
 #endif
@@ -79,16 +116,16 @@ void dhcp_function(void *ptr)
 	}
 
 	/* DNS setting #1 */
-	snprintf(buf, sizeof(buf), "net.%s.dns1", interface);
+	snprintf(buf, sizeof(buf), "net.%s.dns1", tdata->interface);
 	property_get(buf, value, "");
 	property_set("net.dns1", value);
 
 	/* Report status of network connection */
-	snprintf(buf, sizeof(buf), "net.%s.status", interface);
+	snprintf(buf, sizeof(buf), "net.%s.status", tdata->interface);
 	property_set(buf, !!strcmp(value, "") ? "dhcp" : "up");
 
 	/* DNS setting #2 */
-	snprintf(buf, sizeof(buf), "net.%s.dns2", interface);
+	snprintf(buf, sizeof(buf), "net.%s.dns2", tdata->interface);
 	property_get(buf, value, "");
 	property_set("net.dns2", value);
 
@@ -126,6 +163,10 @@ void monitor_connection(char *interface)
 	int tmp_state = 0;
 	int fd;
 	struct timespec time_now;
+	tdata_t  tdata;
+
+	tdata.interface = interface;
+	memset(&tdata.info, 0, sizeof(dhcp_info));
 
 	pthread_t thread;
 #ifdef DEBUG
@@ -133,7 +174,6 @@ void monitor_connection(char *interface)
 #endif
 
 	while (1) {
-		sleep(5); 
 		/* setup the control structures */
 		memset(&ifr, 0, sizeof(ifr));
 		strcpy(ifr.ifr_name, interface);
@@ -174,7 +214,7 @@ void monitor_connection(char *interface)
 				printf("Connection up %s\n", interface);
 #endif
 				fprintf(stdout, "ethmonitor: monitor_connection  5 call dhcp_function\n");
-				pthread_create (&thread, NULL, (void *) &dhcp_function, (void *) interface);
+				pthread_create (&thread, NULL, (void *) &dhcp_function, (void *) &tdata);
 
 			} else { /* down connection */
 #ifdef DEBUG
@@ -190,8 +230,12 @@ void monitor_connection(char *interface)
 				time_now.tv_nsec < retry_time.tv_nsec) continue; /* not time yet */
 			/* yes it's time */
 			retry_dhcp = 0; /* Just to avoid a race condition */
-			pthread_create (&thread, NULL, (void *) &dhcp_function, (void *) interface);
+			pthread_create (&thread, NULL, (void *) &dhcp_function, (void *) &tdata);
+		} else if (state && (! renew_running) && !retry_dhcp) {
+			/* IF is up, DHCP has succeeded, and not currently renewing, so renew */
+			pthread_create (&thread, NULL, (void *) &dhcp_function_renew, (void *) &tdata);
 		}
+		sleep(30); 
 	}
 }
 /*
