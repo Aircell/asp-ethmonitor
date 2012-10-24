@@ -74,6 +74,7 @@ void dhcp_function_renew(void *ptr)
 	renew_running = 1;
 	  fprintf(stdout, "ethmonitor: start dhcp_function_renew on %s\n", tdata->interface);
 	retval = do_dhcp_renew(tdata->interface, &(tdata->info));
+
 	renew_running = 0;
 	pthread_exit(NULL);
 
@@ -235,7 +236,7 @@ void monitor_connection(char *interface)
 			/* IF is up, DHCP has succeeded, and not currently renewing, so renew */
 			pthread_create (&thread, NULL, (void *) &dhcp_function_renew, (void *) &tdata);
 		}
-		sleep(30); 
+		sleep(60); 
 	}
 }
 /*
